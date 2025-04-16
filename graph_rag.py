@@ -309,25 +309,14 @@ class GraphRAG:
                 return False
             except Exception as e:
                 logger.warning(f"Failed to load existing indices, will reindex: {e}")
-        
+                
         # Load and process documents
         documents = self.load_data_from_directory(data_dir)
-        
-        # Build indices only if they are not already loaded
-        if not self.kg_index:
-            self.build_knowledge_graph(documents)
-        else:
-            logger.info("Knowledge graph already built. Skipping.")
-        
-        if not self.vector_index:
-            self.build_vector_index(documents)
-        else:
-            logger.info("Vector index already built. Skipping.")
-        
-        if not self.composable_graph:
-            self.create_composable_graph()
-        else:
-            logger.info("Composable graph already created. Skipping.")
+
+        # Build indices
+        self.build_knowledge_graph(documents)
+        self.build_vector_index(documents)
+        self.create_composable_graph()
         
         # Update and save fingerprint
         self.data_fingerprint[data_dir] = current_fingerprint
