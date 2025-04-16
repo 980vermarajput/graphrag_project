@@ -41,15 +41,15 @@ logger = logging.getLogger()
 
 class GraphRAG:
     """
-    GraphRAG: A class implementing Graph-based Retrieval Augmented Generation using LlamaIndex
-    with Groq LLM and ChromaDB vector store
-    
-    This class provides functionality to:
-    1. Load and process documents from various sources
-    2. Build a knowledge graph from the documents
-    3. Create vector indices with ChromaDB for efficient retrieval
-    4. Query the system using graph-based context with Groq LLM
-    5. Skip embedding process if documents were already processed
+    GraphRAG: A class implementing Graph-based Retrieval Augmented Generation
+    Flow of operations:
+    1. Initialize -> Sets up LLM, embedding model, and storage
+    2. process_and_index_data -> Main entry point for processing documents
+    3. load_data_from_directory -> Reads documents
+    4. build_knowledge_graph -> Creates knowledge graph from documents
+    5. build_vector_index -> Creates vector embeddings in ChromaDB
+    6. create_composable_graph -> Combines KG and vector indices
+    7. query -> Used for actual querying after setup
     """
     
     def __init__(
@@ -62,15 +62,11 @@ class GraphRAG:
         chroma_dir: str = "./chroma_db"
     ):
         """
-        Initialize the GraphRAG system
-        
-        Args:
-            llm_model: The Groq LLM model to use for generation
-            embed_model: The embedding model to use for vector representations
-            persist_dir: Directory to persist graph indices
-            temperature: Temperature parameter for the LLM
-            chroma_collection_name: Name of the ChromaDB collection
-            chroma_dir: Directory to persist ChromaDB
+        Step 1: Initialization
+        - Sets up Groq LLM for text generation
+        - Initializes embedding model for vector representations
+        - Creates storage directories and ChromaDB connection
+        - Loads any existing document fingerprints
         """
         # Initialize Groq LLM
         self.llm = Groq(model=llm_model, temperature=temperature)
@@ -143,13 +139,10 @@ class GraphRAG:
     
     def calculate_data_fingerprint(self, data_dir: str) -> str:
         """
-        Calculate a fingerprint for the data directory to detect changes
-        
-        Args:
-            data_dir: Path to data directory
-            
-        Returns:
-            Fingerprint string representing the data state
+        Helper function: Called during process_and_index_data
+        - Creates a unique hash based on file contents and metadata
+        - Used to detect if documents have changed and need reprocessing
+        - Prevents unnecessary reindexing of unchanged documents
         """
         data_path = Path(data_dir)
         if not data_path.exists() or not data_path.is_dir():
@@ -173,13 +166,11 @@ class GraphRAG:
     
     def load_data_from_directory(self, data_dir: str) -> List[Document]:
         """
-        Load documents from a directory
-        
-        Args:
-            data_dir: Path to the directory containing documents
-            
-        Returns:
-            List of Document objects
+        Step 2: Document Loading
+        - Called by process_and_index_data
+        - Reads all documents from specified directory
+        - Converts them into LlamaIndex Document objects
+        - First step in the document processing pipeline
         """
         logger.info(f"Loading data from directory: {data_dir}")
         reader = SimpleDirectoryReader(data_dir)
@@ -189,13 +180,11 @@ class GraphRAG:
     
     def build_knowledge_graph(self, documents: List[Document]) -> KnowledgeGraphIndex:
         """
-        Build a knowledge graph from documents
-        
-        Args:
-            documents: List of Document objects
-            
-        Returns:
-            Knowledge Graph Index
+        Step 3: Knowledge Graph Creation
+        - Called after load_data_from_directory
+        - Extracts relationships and entities from documents
+        - Creates a graph structure for contextual understanding
+        - Stores graph data in SimpleGraphStore
         """
         logger.info("Building knowledge graph...")
         
@@ -207,18 +196,15 @@ class GraphRAG:
             include_embeddings=True,
         )
         
-        # logger.info(f"Knowledge graph built with {len(self.graph_store.get_all_nodes())} nodes")
         return self.kg_index
     
     def build_vector_index(self, documents: List[Document]) -> VectorStoreIndex:
         """
-        Build a vector index from documents for efficient retrieval using ChromaDB
-        
-        Args:
-            documents: List of Document objects
-            
-        Returns:
-            Vector Store Index
+        Step 4: Vector Index Creation
+        - Runs parallel to knowledge graph creation
+        - Splits documents into chunks using SentenceSplitter
+        - Creates embeddings for each chunk
+        - Stores vectors in ChromaDB for similarity search
         """
         logger.info("Building vector index with ChromaDB...")
         
@@ -236,10 +222,11 @@ class GraphRAG:
     
     def create_composable_graph(self) -> ComposableGraph:
         """
-        Create a composable graph combining KG and vector indices
-        
-        Returns:
-            Composable Graph for hybrid retrieval
+        Step 5: Graph Composition
+        - Called after both KG and vector indices are built
+        - Combines knowledge graph and vector indices
+        - Enables hybrid search using both semantic and graph-based retrieval
+        - Creates foundation for query processing
         """
         if not self.kg_index or not self.vector_index:
             raise ValueError("Both knowledge graph and vector indices must be built first")
@@ -263,13 +250,11 @@ class GraphRAG:
     
     def create_query_engine(self, hyde_enabled: bool = True) -> RetrieverQueryEngine:
         """
-        Create a query engine for graph-based retrieval
-        
-        Args:
-            hyde_enabled: Whether to enable HyDE (Hypothetical Document Embeddings)
-            
-        Returns:
-            Query engine for retrieval
+        Step 6: Query Engine Setup
+        - Called during query processing
+        - Sets up hybrid retrieval system
+        - Configures HyDE for better query understanding
+        - Creates the engine that will process actual queries
         """
         logger.info("Creating query engine...")
         
@@ -294,7 +279,7 @@ class GraphRAG:
             )
             query_engine = TransformQueryEngine(
                 query_engine=query_engine,
-                query_transform=hyde_transform  # Changed from 'transform' to 'query_transform'
+                query_transform=hyde_transform
             )
             logger.info("HyDE query transformation enabled")
         
@@ -303,15 +288,12 @@ class GraphRAG:
     
     def process_and_index_data(self, data_dir: str, force_reindex: bool = False) -> bool:
         """
-        Process data from a directory and build all indices.
-        Skip processing if data hasn't changed since last run.
-        
-        Args:
-            data_dir: Path to directory containing documents
-            force_reindex: Force reindexing even if fingerprint matches
-            
-        Returns:
-            Boolean indicating if new indexing was performed
+        Main Entry Point: Document Processing
+        - First function called after initialization
+        - Orchestrates the entire document processing pipeline
+        - Checks if reprocessing is needed using fingerprints
+        - Calls all document processing functions in sequence
+        - Persists results to disk
         """
         # Calculate fingerprint of data directory
         current_fingerprint = self.calculate_data_fingerprint(data_dir)
@@ -362,15 +344,11 @@ class GraphRAG:
     
     def query(self, query_text: str, response_mode: str = "compact") -> Dict[str, Any]:
         """
-        Query the system with graph-based retrieval using Groq LLM.
-        Ensures indices are loaded before querying.
-        
-        Args:
-            query_text: The query text
-            response_mode: Response formatting mode
-            
-        Returns:
-            Response dictionary containing answer and context
+        Main Query Function: Called by end users
+        - Entry point for all queries after system is set up
+        - Ensures indices are loaded
+        - Creates query engine if needed
+        - Processes query and returns structured response
         """
         logger.info(f"Processing query: {query_text}")
         
@@ -407,8 +385,10 @@ class GraphRAG:
     
     def persist_indices(self) -> None:
         """
-        Persist graph indices to disk
-        Note: ChromaDB is already persisted automatically
+        Storage Function: Called after indexing
+        - Saves knowledge graph and vector indices to disk
+        - Ensures data persistence between runs
+        - ChromaDB handles its own persistence
         """
         logger.info(f"Persisting graph indices to {self.persist_dir}")
         
@@ -433,7 +413,11 @@ class GraphRAG:
     
     def load_indices_from_disk(self) -> None:
         """
-        Load indices from disk and reconnect to ChromaDB
+        Recovery Function: Called when loading existing data
+        - Loads previously saved indices from disk
+        - Reconnects to ChromaDB
+        - Rebuilds composable graph
+        - Enables system to resume from previous state
         """
         logger.info(f"Loading indices from {self.persist_dir}")
         
