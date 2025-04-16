@@ -1,0 +1,23 @@
+# Virtual Environment
+graphrag_env/
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local data and storage
+data/
+chroma_db/
+storage/
+
+# Environment variables
+.env
+
+# API keys or sensitive info
+*_key.txt
+
+# OS files
+.DS_Store
