@@ -63,3 +63,10 @@ mkdir data
 ```bash
 python run_graphrag.py
 ```
+
+6. **Deactivate the environment**
+   When you're done, deactivate the virtual environment:
+
+```bash
+deactivate
+```
