@@ -1,8 +1,14 @@
 import os
+from dotenv import load_dotenv
 from graph_rag import GraphRAG
 
-# Set your Groq API key
-os.environ["GROQ_API_KEY"] = "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"  # Replace with your actual key
+# Load environment variables
+load_dotenv()
+
+# Get API key from .env
+api_key = os.getenv("GROQ_API_KEY")
+if not api_key:
+    raise ValueError("GROQ_API_KEY not found in .env file")
 
 # Initialize GraphRAG
 graph_rag = GraphRAG(
