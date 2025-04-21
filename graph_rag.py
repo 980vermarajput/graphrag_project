@@ -58,7 +58,6 @@ class GraphRAG:
         embed_model: str = "nomic-ai/nomic-embed-text-v1.5",  # Compatible embedding model
         persist_dir: str = "./storage",
         temperature: float = 0.1,
-        chroma_collection_name: str = "graph_rag",
         chroma_dir: str = "./chroma_db"
     ):
         """
@@ -95,34 +94,17 @@ class GraphRAG:
                 logger.warning(f"Could not load data fingerprints: {e}")
         
         # ChromaDB setup
-        self.chroma_collection_name = chroma_collection_name
         self.chroma_dir = Path(chroma_dir)
         self.chroma_dir.mkdir(exist_ok=True, parents=True)
         
-        # Initialize ChromaDB client and collection
+        # Initialize ChromaDB client
         self.chroma_client = chromadb.PersistentClient(path=str(self.chroma_dir))
-        try:
-            self.chroma_collection = self.chroma_client.get_or_create_collection(
-                name=self.chroma_collection_name
-            )
-            logger.info(f"ChromaDB collection '{self.chroma_collection_name}' initialized")
-        except Exception as e:
-            logger.error(f"Error initializing ChromaDB: {e}")
-            raise
-        
-        # Create ChromaVectorStore using the collection
-        self.vector_store = ChromaVectorStore(
-            chroma_collection=self.chroma_collection
-        )
         
         # Initialize graph store for knowledge graph
         self.graph_store = SimpleGraphStore()
         
         # Create storage context with ChromaDB vector store and graph store
-        self.storage_context = StorageContext.from_defaults(
-            vector_store=self.vector_store,
-            graph_store=self.graph_store
-        )
+        self.storage_context = None
         
         # Initialize text splitter for document processing
         self.node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=200)
@@ -135,7 +117,78 @@ class GraphRAG:
         # Flag to track if data has been loaded
         self.data_loaded = False
         
+        # Add project tracking
+        self.current_project = None
+        self.projects = set()
+        self.project_collections = {}  # Add this to track sanitized collection names
+        self._load_existing_projects()
+        
         logger.info("GraphRAG system initialized with Groq LLM and ChromaDB")
+    
+    def _load_existing_projects(self):
+        """Load list of existing projects from storage directory"""
+        if self.persist_dir.exists():
+            for item in self.persist_dir.iterdir():
+                if item.is_dir() and (item / "kg_index").exists():
+                    self.projects.add(item.name)
+        logger.info(f"Found existing projects: {self.projects}")
+    
+    def _sanitize_collection_name(self, project_name: str) -> str:
+        """Sanitize project name for ChromaDB collection naming requirements"""
+        # Replace spaces and special chars with underscore, keep alphanumeric
+        sanitized = ''.join(c if c.isalnum() else '_' for c in project_name)
+        # Ensure it starts with a letter (ChromaDB requirement)
+        if not sanitized[0].isalpha():
+            sanitized = 'p_' + sanitized
+        return sanitized
+
+    def set_current_project(self, project_name: str):
+        """Set the current project context and load its indices"""
+        self.current_project = project_name
+        if project_name not in self.projects:
+            self.projects.add(project_name)
+        
+        # Update storage paths for current project
+        project_persist_dir = self.persist_dir / project_name
+        project_persist_dir.mkdir(exist_ok=True, parents=True)
+        
+        # Create or get project-specific ChromaDB collection
+        sanitized_name = self._sanitize_collection_name(project_name)
+        self.project_collections[project_name] = sanitized_name
+        
+        try:
+            # Reset ChromaDB client connection
+            self.chroma_client = chromadb.PersistentClient(path=str(self.chroma_dir))
+            self.chroma_collection = self.chroma_client.get_or_create_collection(
+                name=sanitized_name
+            )
+            self.vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
+            
+            # Reset graph store for new project
+            self.graph_store = SimpleGraphStore()
+            
+            # Create fresh storage context
+            self.storage_context = StorageContext.from_defaults(
+                vector_store=self.vector_store,
+                graph_store=self.graph_store
+            )
+            
+            # Try to load existing indices for this project
+            try:
+                self.load_indices_from_disk()
+                self.data_loaded = True
+            except Exception as e:
+                logger.warning(f"No existing indices found for project {project_name}: {e}")
+                self.data_loaded = False
+                self.kg_index = None
+                self.vector_index = None
+                self.composable_graph = None
+                
+        except Exception as e:
+            logger.error(f"Error setting up project storage: {e}")
+            raise
+        
+        logger.info(f"Set current project to: {project_name}")
     
     def calculate_data_fingerprint(self, data_dir: str) -> str:
         """
@@ -286,32 +339,30 @@ class GraphRAG:
         logger.info("Query engine created")
         return query_engine
     
-    def process_and_index_data(self, data_dir: str, force_reindex: bool = False) -> bool:
-        """
-        Main Entry Point: Document Processing
-        - First function called after initialization
-        - Orchestrates the entire document processing pipeline
-        - Checks if reprocessing is needed using fingerprints
-        - Calls all document processing functions in sequence
-        - Persists results to disk
-        """
+    def process_and_index_data(self, data_dir: str, project_name: str, force_reindex: bool = False) -> bool:
+        """Modified to handle project-specific processing"""
+        self.set_current_project(project_name)
+        project_data_dir = Path(data_dir) / project_name
+        
+        if not project_data_dir.exists():
+            raise ValueError(f"Project directory not found: {project_data_dir}")
+        
         # Calculate fingerprint of data directory
-        current_fingerprint = self.calculate_data_fingerprint(data_dir)
-        previous_fingerprint = self.data_fingerprint.get(data_dir, "")
+        current_fingerprint = self.calculate_data_fingerprint(str(project_data_dir))
+        previous_fingerprint = self.data_fingerprint.get(str(project_data_dir), "")
         
         # Check if we need to reprocess the data
         if current_fingerprint == previous_fingerprint and not force_reindex:
-            logger.info("Data unchanged since last indexing. Skipping processing.")
-            # Try to load existing indices
+            logger.info("Project data unchanged. Loading existing indices.")
             try:
                 self.load_indices_from_disk()
                 self.data_loaded = True
                 return False
             except Exception as e:
-                logger.warning(f"Failed to load existing indices, will reindex: {e}")
-                
+                logger.warning(f"Failed to load existing indices: {e}")
+
         # Load and process documents
-        documents = self.load_data_from_directory(data_dir)
+        documents = self.load_data_from_directory(str(project_data_dir))
 
         # Build indices
         self.build_knowledge_graph(documents)
@@ -319,7 +370,7 @@ class GraphRAG:
         self.create_composable_graph()
         
         # Update and save fingerprint
-        self.data_fingerprint[data_dir] = current_fingerprint
+        self.data_fingerprint[str(project_data_dir)] = current_fingerprint
         with open(self.fingerprint_file, 'w') as f:
             json.dump(self.data_fingerprint, f)
         
@@ -373,104 +424,83 @@ class GraphRAG:
         return result
     
     def persist_indices(self) -> None:
-        """
-        Storage Function: Called after indexing
-        - Saves knowledge graph and vector indices to disk
-        - Ensures data persistence between runs
-        - ChromaDB handles its own persistence
-        """
-        logger.info(f"Persisting graph indices to {self.persist_dir}")
+        """Modified to handle project-specific storage"""
+        if not self.current_project:
+            raise ValueError("No project selected")
         
-        # Save KG index
+        project_dir = self.persist_dir / self.current_project
+        project_dir.mkdir(exist_ok=True, parents=True)
+        
+        logger.info(f"Persisting indices for project {self.current_project}")
+        
         if self.kg_index:
-            kg_path = self.persist_dir / "kg_index"
+            kg_path = project_dir / "kg_index"
             kg_path.mkdir(exist_ok=True, parents=True)
-            self.kg_index.set_index_id("kg_index")  # Set explicit index ID
+            self.kg_index.set_index_id(f"kg_index_{self.current_project}")
             self.kg_index.storage_context.persist(persist_dir=str(kg_path))
-            logger.info("Knowledge graph index persisted")
         
-        # Save vector index metadata (ChromaDB handles the vectors)
         if self.vector_index:
-            vector_path = self.persist_dir / "vector_index"
+            vector_path = project_dir / "vector_index"
             vector_path.mkdir(exist_ok=True, parents=True)
-            self.vector_index.set_index_id("vector_index")  # Set explicit index ID
+            self.vector_index.set_index_id(f"vector_index_{self.current_project}")
             self.vector_index.storage_context.persist(persist_dir=str(vector_path))
-            logger.info("Vector index metadata persisted")
         
-        logger.info("Graph indices persisted successfully")
-        logger.info("ChromaDB vector store is automatically persisted")
-    
+        logger.info(f"Indices persisted for project {self.current_project}")
+
     def load_indices_from_disk(self) -> None:
-        """
-        Recovery Function: Called when loading existing data
-        - Loads previously saved indices from disk
-        - Reconnects to ChromaDB
-        - Rebuilds composable graph
-        - Enables system to resume from previous state
-        """
-        logger.info(f"Loading indices from {self.persist_dir}")
+        """Load project-specific indices"""
+        if not self.current_project:
+            raise ValueError("No project selected")
         
-        # Reconnect to ChromaDB
-        self.chroma_client = chromadb.PersistentClient(path=str(self.chroma_dir))
-        try:
-            self.chroma_collection = self.chroma_client.get_collection(name=self.chroma_collection_name)
-            self.vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
-            logger.info(f"Reconnected to ChromaDB collection '{self.chroma_collection_name}'")
-        except Exception as e:
-            logger.error(f"Error reconnecting to ChromaDB: {e}")
-            raise
+        project_dir = self.persist_dir / self.current_project
+        
+        logger.info(f"Loading indices for project {self.current_project}")
+        
+        # Reset and reconnect to project-specific ChromaDB collection
+        sanitized_name = self.project_collections[self.current_project]
+        self.chroma_collection = self.chroma_client.get_collection(name=sanitized_name)
+        self.vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
+        
+        # Reset graph store
+        self.graph_store = SimpleGraphStore()
         
         try:
-            # Load knowledge graph index
-            kg_path = self.persist_dir / "kg_index"
-            if kg_path.exists():
-                # Create storage context with both stores
-                storage_context = StorageContext.from_defaults(
-                    persist_dir=str(kg_path),
-                    vector_store=self.vector_store,
-                    graph_store=self.graph_store
-                )
-                
-                # Load KG index with explicit index ID
-                self.kg_index = load_index_from_storage(
-                    storage_context,
-                    index_id="kg_index"
-                )
-                logger.info("Knowledge graph index loaded")
-            else:
+            kg_path = project_dir / "kg_index"
+            if not kg_path.exists():
                 raise FileNotFoundError(f"Knowledge graph index not found at {kg_path}")
             
-            # Load vector index from ChromaDB
-            vector_path = self.persist_dir / "vector_index"
-            if vector_path.exists():
-                # Create storage context for vector index
-                vector_storage_context = StorageContext.from_defaults(
-                    persist_dir=str(vector_path),
-                    vector_store=self.vector_store
-                )
-                self.vector_index = load_index_from_storage(
-                    vector_storage_context,
-                    index_id="vector_index"
-                )
-            else:
-                # If no persisted metadata, create fresh from vector store
-                self.vector_index = VectorStoreIndex.from_vector_store(
-                    self.vector_store,
-                    index_id="vector_index"
-                )
-            logger.info("Vector index loaded")
-            
-            # Update storage context
-            self.storage_context = StorageContext.from_defaults(
+            # Load knowledge graph with fresh storage context
+            storage_context = StorageContext.from_defaults(
+                persist_dir=str(kg_path),
                 vector_store=self.vector_store,
                 graph_store=self.graph_store
             )
+            
+            self.kg_index = load_index_from_storage(
+                storage_context,
+                index_id=f"kg_index_{self.current_project}"
+            )
+            
+            # Load vector index
+            vector_path = project_dir / "vector_index"
+            vector_storage_context = StorageContext.from_defaults(
+                persist_dir=str(vector_path) if vector_path.exists() else None,
+                vector_store=self.vector_store
+            )
+            
+            self.vector_index = load_index_from_storage(
+                vector_storage_context,
+                index_id=f"vector_index_{self.current_project}"
+            )
+            
+            # Update main storage context
+            self.storage_context = storage_context
             
             # Recreate composable graph
             if self.kg_index and self.vector_index:
                 self.create_composable_graph()
             
-            logger.info("All indices loaded successfully")
+            logger.info(f"Successfully loaded indices for project {self.current_project}")
             self.data_loaded = True
             
         except Exception as e:

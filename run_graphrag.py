@@ -1,6 +1,8 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from graph_rag import GraphRAG
+import questionary
 
 # Load environment variables
 load_dotenv()
@@ -18,19 +20,62 @@ graph_rag = GraphRAG(
     persist_dir="./storage"
 )
 
-# Process data - will skip if already processed
-graph_rag.process_and_index_data("./data")
+# Scan data directory for projects
+data_dir = Path("./data")
+projects = [d.name for d in data_dir.iterdir() if d.is_dir()]
+
+if not projects:
+    print("No project folders found in ./data directory!")
+    exit(1)
+
+print("Available projects:", projects)
+
+# Process each project
+for project in projects:
+    print(f"\nProcessing project: {project}")
+    try:
+        graph_rag.process_and_index_data("./data", project)
+    except Exception as e:
+        print(f"Error processing project {project}: {e}")
+        print("Skipping to next project...")
+        continue
 
 # Interactive query loop
-print("GraphRAG system is ready! Type 'exit' to quit.")
+print("\nGraphRAG system is ready! Type 'exit' to quit.")
 while True:
-    query = input("\nEnter your question: ")
-    if query.lower() == 'exit':
+    # Project selection using questionary
+    choices = projects + ['exit']
+    project = questionary.select(
+        "Select project:",
+        choices=choices,
+        use_indicator=True,
+    ).ask()
+    
+    if project == 'exit' or project is None:
         break
     
-    response = graph_rag.query(query)
-    
-    print("\nResponse:", response["response"])
-    # print("\nSources:")
-    # for i, source in enumerate(response["source_nodes"][:3]):  # Show first 3 sources
-    #     print(f"{i+1}. {source[:150]}...")  # First 150 chars of each source
+    try:
+        # Set current project context and load its data
+        graph_rag.set_current_project(project)
+        
+        # Query loop for selected project
+        while True:
+            query = input(f"\n[{project}] Enter your question (or 'back' to switch project): ")
+            if query.lower() == 'back':
+                break
+            if query.lower() == 'exit':
+                exit(0)
+            
+            try:
+                response = graph_rag.query(query)
+                print("\nResponse:", response["response"])
+                if response.get("source_nodes"):
+                    print("\nSources:")
+                    for i, source in enumerate(response["source_nodes"], 1):
+                        print(f"{i}. {source[:200]}...")
+            except Exception as e:
+                print(f"Error processing query: {e}")
+                
+    except Exception as e:
+        print(f"Error switching to project {project}: {e}")
+        continue
