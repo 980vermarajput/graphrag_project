@@ -69,10 +69,10 @@ while True:
             try:
                 response = graph_rag.query(query)
                 print("\nResponse:", response["response"])
-                if response.get("source_nodes"):
-                    print("\nSources:")
-                    for i, source in enumerate(response["source_nodes"], 1):
-                        print(f"{i}. {source[:200]}...")
+                # if response.get("source_nodes"):
+                #     print("\nSources:")
+                #     for i, source in enumerate(response["source_nodes"], 1):
+                #         print(f"{i}. {source[:200]}...")
             except Exception as e:
                 print(f"Error processing query: {e}")
                 
