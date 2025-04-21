@@ -126,7 +126,13 @@ class GraphRAG:
         logger.info("GraphRAG system initialized with Groq LLM and ChromaDB")
     
     def _load_existing_projects(self):
-        """Load list of existing projects from storage directory"""
+        """
+        Step: Project Loading
+        - Scans storage directory for existing projects
+        - Checks for kg_index subdirectory to validate project
+        - Populates self.projects set with valid project names
+        - Called during initialization to track existing projects
+        """
         if self.persist_dir.exists():
             for item in self.persist_dir.iterdir():
                 if item.is_dir() and (item / "kg_index").exists():
@@ -134,16 +140,27 @@ class GraphRAG:
         logger.info(f"Found existing projects: {self.projects}")
     
     def _sanitize_collection_name(self, project_name: str) -> str:
-        """Sanitize project name for ChromaDB collection naming requirements"""
-        # Replace spaces and special chars with underscore, keep alphanumeric
+        """
+        Step: Collection Name Sanitization
+        - Converts project name to valid ChromaDB collection name
+        - Removes special characters and spaces
+        - Ensures name starts with a letter
+        - Returns sanitized name compliant with ChromaDB requirements
+        """
         sanitized = ''.join(c if c.isalnum() else '_' for c in project_name)
-        # Ensure it starts with a letter (ChromaDB requirement)
         if not sanitized[0].isalpha():
             sanitized = 'p_' + sanitized
         return sanitized
 
     def set_current_project(self, project_name: str):
-        """Set the current project context and load its indices"""
+        """
+        Step: Project Context Management
+        - Switches active project context
+        - Creates/loads project-specific ChromaDB collection
+        - Initializes fresh storage context for the project
+        - Attempts to load existing indices for the project
+        - Sets up vector store and graph store for the project
+        """
         self.current_project = project_name
         if project_name not in self.projects:
             self.projects.add(project_name)
@@ -192,10 +209,12 @@ class GraphRAG:
     
     def calculate_data_fingerprint(self, data_dir: str) -> str:
         """
-        Helper function: Called during process_and_index_data
-        - Creates a unique hash based on file contents and metadata
-        - Used to detect if documents have changed and need reprocessing
-        - Prevents unnecessary reindexing of unchanged documents
+        Step: Data Change Detection
+        - Generates unique hash for project data directory
+        - Includes file paths, sizes, and modification times
+        - Used to detect changes in project documents
+        - Prevents unnecessary reprocessing of unchanged data
+        - Returns MD5 hash string of project state
         """
         data_path = Path(data_dir)
         if not data_path.exists() or not data_path.is_dir():
@@ -424,7 +443,14 @@ class GraphRAG:
         return result
     
     def persist_indices(self) -> None:
-        """Modified to handle project-specific storage"""
+        """
+        Step: Index Persistence
+        - Saves project indices to disk
+        - Creates project-specific storage directory
+        - Persists knowledge graph index with unique ID
+        - Persists vector index with unique ID
+        - Ensures project data can be reloaded later
+        """
         if not self.current_project:
             raise ValueError("No project selected")
         
@@ -448,7 +474,15 @@ class GraphRAG:
         logger.info(f"Indices persisted for project {self.current_project}")
 
     def load_indices_from_disk(self) -> None:
-        """Load project-specific indices"""
+        """
+        Step: Index Loading
+        - Loads project-specific indices from disk
+        - Reconnects to project ChromaDB collection
+        - Initializes fresh graph store
+        - Loads knowledge graph and vector indices
+        - Recreates composable graph for querying
+        - Validates all required components are loaded
+        """
         if not self.current_project:
             raise ValueError("No project selected")
         
