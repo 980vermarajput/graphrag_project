@@ -58,7 +58,8 @@ class GraphRAG:
         embed_model: str = "nomic-ai/nomic-embed-text-v1.5",  # Compatible embedding model
         persist_dir: str = "./storage",
         temperature: float = 0.1,
-        chroma_dir: str = "./chroma_db"
+        chroma_dir: str = "./chroma_db",
+        system_prompt: str = "You are a helpful AI assistant that provides accurate, relevant information based on the provided context."
     ):
         """
         Step 1: Initialization
@@ -69,6 +70,7 @@ class GraphRAG:
         """
         # Initialize Groq LLM
         self.llm = Groq(model=llm_model, temperature=temperature)
+        self.system_prompt = system_prompt
         
         # We'll use a compatible embedding model
         from llama_index.embeddings.huggingface.base import HuggingFaceEmbedding
@@ -336,11 +338,12 @@ class GraphRAG:
             include_text=True
         )
         
-        # Create base query engine
+        # Create base query engine with system prompt
         query_engine = RetrieverQueryEngine.from_args(
             retriever=kg_retriever,
             node_postprocessors=[],
-            response_mode="compact"
+            response_mode="compact",
+            system_prompt=self.system_prompt
         )
         
         # Add HyDE query transformation if enabled

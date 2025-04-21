@@ -12,12 +12,21 @@ api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
     raise ValueError("GROQ_API_KEY not found in .env file")
 
-# Initialize GraphRAG
+# Initialize GraphRAG with system prompt
+system_prompt = """You are a helpful AI assistant that:
+1. Provides accurate and concise answers based on the available context
+2. Acknowledges when information might be incomplete or uncertain
+3. Cites specific sources when possible
+4. Stays focused on the user's question
+5. Uses a professional and clear tone
+"""
+
 graph_rag = GraphRAG(
     llm_model="llama3-70b-8192",
     embed_model="nomic-ai/nomic-embed-text-v1.5",
     chroma_dir="./chroma_db",
-    persist_dir="./storage"
+    persist_dir="./storage",
+    system_prompt=system_prompt
 )
 
 # Scan data directory for projects
